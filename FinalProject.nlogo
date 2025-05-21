@@ -1,14 +1,27 @@
 ;----------------------
-; Dengue Spread Model (Simplified)
-; Barangay Lahug context, with 1 tick = 1 day
+; Dengue Spread Model
+; Realisticwith 1 tick = 1 day
 ;----------------------
-
 globals [
   %infected-humans     ;; what % of the human population is infectious
   %infected-mosquitoes ;; what % of the mosquitoe population is infectious
   %recovered-humans    ;; what % of humans have recovered
+  custom-chance-larvae?;; flag that opens larvae custom chance of survival
   human-death-toll     ;; death toll of humans
   mosquito-death-toll  ;; death toll of mosquitoes
+  total-humans         ;; total human population
+  total-mosquitoes     ;; total mosquito population
+  total-larvae         ;; total larvae population
+  cur-human-population ;; current human population
+  cur-mosqto-population;; current mosquito population
+  cur-larvae-population;; current larvae population
+  total-hatched-larvae ;; total larvae that hatched to mosquitoes
+  larvae-death-toll    ;; total death toll of larvae before hatching to mosquitoes
+  n-human-infected     ;; total infected humans
+  n-mosquito-infected  ;; total infected mosquitoes
+  mosquito-size        ;; mosquito scaling
+  larvae-size          ;; larvae scaling
+  human-size           ;; human scaling
 ]
 
 breed [humans human]
@@ -34,7 +47,7 @@ mosquitoes-own [
   age                      ;; current age of the mosquito (in days)
   sex                      ;; "male" or "female"
   fertility-age            ;; age at which mosquito can reproduce
-  mated?                   ;; true if the female has already mated
+  eggs-laid                ;; total number of eggs laid in its lifetime
 ]
 
 larvae-own [
@@ -46,27 +59,43 @@ larvae-own [
 ;----------------------
 to setup
   clear-all
+  setup-constants
   setup-humans
   setup-mosquitoes
-  setup-constants
-  ; setup-still-water
+  setup-water
   reset-ticks
 end
 
-to setup-humans
+to setup-constants
+  set mosquito-size 0.4
+  set human-size 1
+  set larvae-size 0.2
+  set mosquito-death-toll 0
+  set n-mosquito-infected 0
+  set total-humans init-total-humans
+  set cur-human-population init-total-humans
+  set cur-mosqto-population init-total-mosquitoes
+  set cur-larvae-population 0
+  set total-mosquitoes init-total-mosquitoes
+  set n-human-infected init-n-human-infected
+  set-default-shape larvae "circle"
+  set-default-shape mosquitoes "bug"
   set-default-shape humans "person"
-  create-humans total-humans [
+end
+
+to setup-humans
+  create-humans init-total-humans [
     setxy random-xcor random-ycor
-    set size 0.5
+    set size human-size
     set dengue-serotypes []
     set current-serotype ""
     set infected? false
     set severe-dengue? false
     set has-care? (random-float 100 < 80)
     set recovery-time 0
-    set color blue
+    set color green
   ]
-  ask n-of n-infected-humans humans [
+  ask n-of init-n-human-infected humans [
     set infected? true
     set current-serotype one-of ["DENV-1" "DENV-2" "DENV-3" "DENV-4"]
     set dengue-serotypes lput current-serotype dengue-serotypes
@@ -76,61 +105,83 @@ to setup-humans
 end
 
 to setup-mosquitoes
-  set-default-shape mosquitoes "bug"
-  create-mosquitoes total-mosquitoes [
+  create-mosquitoes init-total-mosquitoes [
     setxy random-xcor random-ycor
     set infected? false
-    set size 0.3
+    set size mosquito-size
     set serotype ""                      ;; the serotype carried by this mosquito
     set lifespan 30
-    set age 0
+    set age random 30
     set sex one-of ["male" "female"]
     set fertility-age 5
-    set mated? false
     set bite-cycle 3                     ;; days between bites
     set days-since-bite random 3         ;; for tracking bite interval
     set color gray
+    set eggs-laid 0
   ]
 end
 
-to setup-constants
-  set human-death-toll 0
-  set mosquito-death-toll 0
-  set-default-shape larvae "circle"
+to setup-water
+  ;; Create clustered water patches
+  let target-water count patches * (water-density / 100)
+  let water-patches 0
+
+  while [water-patches < target-water] [
+    let seed one-of patches with [pcolor != blue]
+    ask seed [
+      set pcolor blue
+      ask patches in-radius 2 with [pcolor != blue] [
+        if random-float 100 < 60 [ set pcolor blue ]
+      ]
+    ]
+    set water-patches count patches with [pcolor = blue]
+  ]
 end
 ;----------------------
 ; go
 ;----------------------
 to go
+
+
   ask mosquitoes [
     set age age + 1
     if age >= lifespan [
+      set cur-mosqto-population cur-mosqto-population - 1
+      set mosquito-death-toll mosquito-death-toll + 1
       die
-      set total-mosquitoes total-mosquitoes - 1
-      set mosquito-death-toll mosquito-death-toll - 1
       stop
     ]
 
     move-mosquito
     set days-since-bite days-since-bite + 1
+
     if days-since-bite >= bite-cycle and sex = "female" [
       bite-human
       set days-since-bite 0
     ]
 
-    if sex = "female" and not mated? [
-      look-for-mate
-    ]
-
-    if age >= fertility-age and sex = "female" and mated? [
+    if age >= fertility-age and sex = "female" and days-since-bite < bite-cycle and eggs-laid < 400[
+    ;; if age >= fertility-age and days-since-bite < bite-cycle and eggs-laid < 400[
       reproduce
     ]
   ]
 
   ask larvae [
     set age age + 1
+    ;;ifelse custom-chance-larvae? [
+    ;;  let chance
+    ;;][
+    ;;]
+    let chance random 61 + 30   ;; 30% - 90% chance
+    if random-float 100 < chance [
+      set cur-larvae-population cur-larvae-population - 1
+      set larvae-death-toll larvae-death-toll + 1
+      die
+    ]
     if age >= development-time [
-
+      set total-hatched-larvae total-hatched-larvae + 1
+      set cur-larvae-population cur-larvae-population - 1
+      hatch-mosquito
       die
     ]
   ]
@@ -141,17 +192,21 @@ to go
       set recovery-time recovery-time - 1
       if recovery-time <= 0 [
         set infected? false
-        set color blue
-        set n-infected-humans n-infected-humans - 1
+        set color green
+        set n-human-infected n-human-infected - 1
       ]
       compute-mortality self
       maybe-die self
     ]
   ]
-
-  set %infected-humans (count humans with [infected?] / total-humans) * 100
   set %infected-mosquitoes (count mosquitoes with [infected?] / total-mosquitoes) * 100
-  set %recovered-humans (count humans with [length dengue-serotypes > 0] / total-humans) * 100
+  ifelse cur-human-population = 0 [
+    set %infected-humans 0
+    set %recovered-humans 0
+  ][
+    set %infected-humans (count humans with [infected?] / total-humans) * 100
+    set %recovered-humans (count humans with [length dengue-serotypes > 0] / total-humans) * 100
+  ]
 
   tick
 end
@@ -161,12 +216,12 @@ end
 ;----------------------
 to move-mosquito
   rt random 50 - random 50
-  fd 0.3
+  fd 2 + random-float 1.5  ;; 2 to 3.5 units per day
 end
 
 to move-humans
   rt random 50 - random 50
-  fd 0.5
+  fd 0.5 + random-float 0.5  ;; move 0.5 to 1 patch per day
 end
 
 ;----------------------
@@ -186,28 +241,36 @@ to bite-human
   ]
 end
 
-to look-for-mate
-  let male one-of mosquitoes with [sex = "male"] in-radius 2
-  if male != nobody [
-    set mated? true
-  ]
-end
-
 to reproduce
-  if random-float 100 < 20 [ ;; 20% chance to lay eggs daily
-    hatch-larvae 3 [
+  let water-location? any? patches with [pcolor = blue] in-radius 1
+  if not water-location? [ stop ]
+
+  let clutch-size random 71 + 30              ;; 30 - 100 eggs
+  let remaining-eggs 400 - eggs-laid
+  if remaining-eggs <= 0 [ stop ]
+  if clutch-size > remaining-eggs [ set clutch-size remaining-eggs ]
+
+  let chance random 61 + 30  ;; 30–90%
+  if random-float 100 < chance [ ;; 20% chance to lay eggs daily
+    set total-larvae total-larvae + clutch-size
+    set cur-larvae-population cur-larvae-population + clutch-size
+
+    hatch-larvae clutch-size [
       setxy [xcor] of myself + random-float 2 - 1 [ycor] of myself + random-float 2 - 1
       set age 0
       set development-time random 5 + 5  ;; larva matures in 5–9 days
       set color gray
+      set size larvae-size
     ]
   ]
+  set eggs-laid eggs-laid + clutch-size
+
 end
 ;----------------------
 ; larvae actions
 ;----------------------
 to hatch-mosquito
-  create-mosquitoes 1 [
+  hatch-mosquitoes 1 [
     setxy [xcor] of myself [ycor] of myself
     set infected? false
     set serotype ""
@@ -217,11 +280,13 @@ to hatch-mosquito
     set age 0
     set sex one-of ["male" "female"]
     set fertility-age 5
-    set mated? false
     set color gray
-    set size 0.3
-    set total-mosquitoes total-mosquitoes + 1
+    set size mosquito-size
+    set eggs-laid 0
   ]
+  set total-mosquitoes total-mosquitoes + 1
+  set cur-mosqto-population cur-mosqto-population + 1
+
 end
 
 ;----------------------
@@ -236,7 +301,7 @@ to infect-human [h s]
     set severe-dengue? (length dengue-serotypes > 1)
     set recovery-time (ifelse-value severe-dengue? [random 7 + 14] [random 4 + 7])
     set color yellow
-    set n-infected-humans n-infected-humans + 1
+    set n-human-infected n-human-infected + 1
   ]
 end
 
@@ -256,19 +321,19 @@ to maybe-die [h]
   ask h [
     if infected? [
       if random-float 100 < chance-of-death [
-        die
-        set total-humans total-humans - 1
+        set cur-human-population cur-human-population - 1
         set human-death-toll human-death-toll + 1
+        die
       ]
     ]
   ]
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
-360
-15
-978
-634
+880
+10
+1516
+648
 -1
 -1
 17.43
@@ -281,10 +346,10 @@ GRAPHICS-WINDOW
 1
 1
 1
--17
-17
--17
-17
+0
+35
+0
+35
 1
 1
 1
@@ -292,9 +357,9 @@ ticks
 30.0
 
 BUTTON
-15
+685
 30
-85
+755
 65
 NIL
 setup
@@ -309,9 +374,9 @@ NIL
 1
 
 BUTTON
-91
+786
 30
-162
+857
 66
 NIL
 go
@@ -326,10 +391,10 @@ NIL
 0
 
 PLOT
-15
-280
-267
-444
+285
+450
+537
+614
 Human Populations
 weeks
 people
@@ -348,10 +413,10 @@ PENS
 "total" 1.0 0 -13840069 true "" "plot count humans"
 
 MONITOR
-15
-220
-112
-265
+440
+330
+537
+375
 INF-HUMANS%
 %infected-humans
 2
@@ -359,55 +424,55 @@ INF-HUMANS%
 11
 
 SLIDER
-15
-80
-187
-113
-total-humans
-total-humans
+685
+130
+857
+161
+init-total-humans
+init-total-humans
 0
 1000
-420.0
+425.0
 1
 1
 NIL
 HORIZONTAL
 
 SLIDER
-15
-125
-187
-158
-n-infected-humans
-n-infected-humans
+685
+175
+857
+208
+init-n-human-infected
+init-n-human-infected
 0
 500
-43.0
+80.0
 1
 1
 NIL
 HORIZONTAL
 
 SLIDER
-15
-170
-187
-203
-total-mosquitoes
-total-mosquitoes
+685
+80
+857
+113
+init-total-mosquitoes
+init-total-mosquitoes
 0
-1000
-312.0
+10000
+6357.0
 1
 1
 NIL
 HORIZONTAL
 
 MONITOR
-130
-220
-227
-265
+135
+125
+240
+170
 INF-MOSQTO%
 %infected-mosquitoes
 2
@@ -415,10 +480,10 @@ INF-MOSQTO%
 11
 
 MONITOR
-245
-225
-340
-270
+440
+385
+535
+430
 REC-HUMANS%
 %recovered-humans
 2
@@ -426,10 +491,10 @@ REC-HUMANS%
 11
 
 PLOT
-20
-455
+15
+450
 265
-620
+615
 Mosquito Populations
 NIL
 NIL
@@ -442,10 +507,182 @@ true
 "" ""
 PENS
 "infected" 1.0 0 -2674135 true "" "plot count mosquitoes with [ infected? ]\n"
-"female" 1.0 0 -2064490 true "" "plot count mosquitoes with [ sex = \"female\" ]"
-"male" 1.0 0 -13345367 true "" "plot count mosquitoes with [ sex = \"male\" ]"
 "dead" 1.0 0 -14737633 true "" "plot mosquito-death-toll"
 "total" 1.0 0 -13840069 true "" "plot total-mosquitoes"
+"cur population" 1.0 0 -955883 true "" "plot cur-mosqto-population"
+
+MONITOR
+285
+390
+387
+435
+TOTAL-HUMANS
+total-humans
+2
+1
+11
+
+MONITOR
+15
+235
+120
+280
+TOTAL-MOSQT
+total-mosquitoes
+2
+1
+11
+
+PLOT
+560
+450
+825
+615
+Larvae Population
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -2064490 true "" "plot count larvae"
+
+MONITOR
+560
+390
+657
+435
+TOTAL-LARVAE
+total-larvae
+0
+1
+11
+
+MONITOR
+560
+335
+692
+380
+LARVAE-DEATH-TOLL
+larvae-death-toll
+0
+1
+11
+
+MONITOR
+670
+390
+787
+435
+HATCHED-LARVAE
+total-hatched-larvae
+0
+1
+11
+
+MONITOR
+135
+235
+240
+280
+MALE-MOSQTO
+count mosquitoes with [ sex = \"male\" ]
+0
+1
+11
+
+PLOT
+15
+290
+265
+440
+Mosquito Sex Population
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+true
+"" ""
+PENS
+"male" 1.0 0 -13345367 true "" "plot count mosquitoes with [ sex = \"male\" ]"
+"female" 1.0 0 -2064490 true "" "plot count mosquitoes with [ sex = \"female\" ]"
+
+MONITOR
+15
+125
+120
+170
+CUR-MOSQT
+cur-mosqto-population
+0
+1
+11
+
+MONITOR
+135
+180
+240
+225
+FEML-MOSQTO
+count mosquitoes with [ sex = \"female\" ]
+0
+1
+11
+
+MONITOR
+15
+180
+120
+225
+MOSQT-DEATH
+mosquito-death-toll
+0
+1
+11
+
+SLIDER
+685
+220
+860
+253
+water-density
+water-density
+0
+100
+16.0
+1
+1
+%
+HORIZONTAL
+
+MONITOR
+285
+335
+390
+380
+CUR-HUMANS
+cur-human-population
+0
+1
+11
+
+MONITOR
+285
+280
+390
+325
+HUMANS-DIED
+human-death-toll
+0
+1
+11
 
 @#$#@#$#@
 ## WHAT IS IT?
