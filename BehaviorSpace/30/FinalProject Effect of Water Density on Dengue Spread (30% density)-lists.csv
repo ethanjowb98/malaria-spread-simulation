@@ -1,0 +1,7 @@
+"BehaviorSpace results (NetLogo 6.4.0)","Lists version 2.0"
+"FinalProject.nlogo"
+"Effect of Water Density on Dengue Spread (30% density)"
+"05/27/2025 01:10:48:699 +0800"
+"min-pxcor","max-pxcor","min-pycor","max-pycor"
+"0","35","0","35"
+"[reporter]","[run number]","init-total-humans","init-n-turtles-infected","water-density","init-total-mosquitoes","max-ticks","[step]"

@@ -22,6 +22,11 @@ globals [
   mosquito-size        ;; mosquito scaling
   larvae-size          ;; larvae scaling
   human-size           ;; human scaling
+  mosquito-bites
+  humans-infected-by-mosquito
+  mosquitoes-infected-by-humans
+  mosquito_to_human_rate
+  human_to_mosquito_rate
 ]
 
 breed [humans human]
@@ -36,6 +41,7 @@ humans-own [
   chance-of-death          ;; chance of death based on severity + care
   infected?                ;; currently infected
   recovery-time            ;; ticks left to recover
+  temp-immunity            ;; temporary cross-strain immunity
 ]
 
 mosquitoes-own [
@@ -53,6 +59,9 @@ mosquitoes-own [
 larvae-own [
   age                      ;; how many days old the larva is
   development-time         ;; time to become adult mosquito
+  check-death?             ;; checks whether larvae already undergoes mortality rate check
+  infected?
+  serotype
 ]
 ;----------------------
 ; setup
@@ -77,7 +86,12 @@ to setup-constants
   set cur-mosqto-population init-total-mosquitoes
   set cur-larvae-population 0
   set total-mosquitoes init-total-mosquitoes
-  set n-human-infected init-n-human-infected
+  set init-n-turtles-infected init-n-turtles-infected
+  set mosquito-bites 0
+  set humans-infected-by-mosquito 0
+  set mosquitoes-infected-by-humans 0
+  set mosquito_to_human_rate 0
+  set human_to_mosquito_rate 0
   set-default-shape larvae "circle"
   set-default-shape mosquitoes "bug"
   set-default-shape humans "person"
@@ -89,17 +103,18 @@ to setup-humans
     set size human-size
     set dengue-serotypes []
     set current-serotype ""
+    set temp-immunity 0
     set infected? false
     set severe-dengue? false
     set has-care? (random-float 100 < 80)
     set recovery-time 0
     set color green
   ]
-  ask n-of init-n-human-infected humans [
+  ask n-of init-n-turtles-infected humans [
     set infected? true
     set current-serotype one-of ["DENV-1" "DENV-2" "DENV-3" "DENV-4"]
     set dengue-serotypes lput current-serotype dengue-serotypes
-    set recovery-time random 4 + 7
+    set recovery-time random 4 + 7    ;; generates 7-10 values
     set color red
   ]
 end
@@ -119,22 +134,42 @@ to setup-mosquitoes
     set color gray
     set eggs-laid 0
   ]
+  ask n-of init-n-turtles-infected mosquitoes [
+    set infected? true
+    set color red
+    set serotype one-of ["DENV-1" "DENV-2" "DENV-3" "DENV-4"]
+  ]
 end
 
 to setup-water
-  ;; Create clustered water patches
-  let target-water count patches * (water-density / 100)
-  let water-patches 0
+  ;; First, set all patches to green
+;  ask patches [ set pcolor green ]
 
-  while [water-patches < target-water] [
+  ;; Calculate how many patches should become water
+  let target-water count patches * (water-density / 100)
+  let current-water-count 0
+
+  ;; Keep growing clusters until we hit the target
+  while [current-water-count < target-water] [
+    ;; Find a non-water patch to start new cluster
     let seed one-of patches with [pcolor != blue]
-    ask seed [
-      set pcolor blue
-      ask patches in-radius 2 with [pcolor != blue] [
-        if random-float 100 < 60 [ set pcolor blue ]
+    if seed != nobody [
+      ask seed [
+        set pcolor blue
+        set current-water-count current-water-count + 1
+
+        ;; Get nearby patches for cluster growth
+        let nearby patches in-radius 2 with [pcolor != blue]
+
+        ;; Convert nearby patches one by one, checking count each time
+        ask nearby [
+          if random-float 100 < 40 and current-water-count < target-water [
+            set pcolor blue
+            set current-water-count current-water-count + 1
+          ]
+        ]
       ]
     ]
-    set water-patches count patches with [pcolor = blue]
   ]
 end
 ;----------------------
@@ -142,6 +177,7 @@ end
 ;----------------------
 to go
 
+  if ticks > max-ticks [ stop ]
 
   ask mosquitoes [
     set age age + 1
@@ -161,18 +197,16 @@ to go
     ]
 
     if age >= fertility-age and sex = "female" and days-since-bite < bite-cycle and eggs-laid < 400[
-    ;; if age >= fertility-age and days-since-bite < bite-cycle and eggs-laid < 400[
       reproduce
     ]
   ]
 
   ask larvae [
     set age age + 1
-    ;;ifelse custom-chance-larvae? [
-    ;;  let chance
-    ;;][
-    ;;]
-    let chance random 61 + 30   ;; 30% - 90% chance
+;    let chance 10
+;    let chance random 61 + 30   ;; 30% - 90% chance
+;    let chance random 11 + 10
+    let chance 30
     if random-float 100 < chance [
       set cur-larvae-population cur-larvae-population - 1
       set larvae-death-toll larvae-death-toll + 1
@@ -188,6 +222,7 @@ to go
 
   ask humans [
     move-humans
+    if temp-immunity > 0 [ set temp-immunity temp-immunity - 1 ]
     if infected? [
       set recovery-time recovery-time - 1
       if recovery-time <= 0 [
@@ -199,6 +234,7 @@ to go
       maybe-die self
     ]
   ]
+
   set %infected-mosquitoes (count mosquitoes with [infected?] / total-mosquitoes) * 100
   ifelse cur-human-population = 0 [
     set %infected-humans 0
@@ -207,7 +243,12 @@ to go
     set %infected-humans (count humans with [infected?] / total-humans) * 100
     set %recovered-humans (count humans with [length dengue-serotypes > 0] / total-humans) * 100
   ]
-
+  if mosquito-bites > 0 [
+    set mosquito_to_human_rate (humans-infected-by-mosquito / mosquito-bites) * 100
+  ]
+  if mosquito-bites > 0 [
+    set human_to_mosquito_rate (mosquitoes-infected-by-humans / mosquito-bites) * 100
+  ]
   tick
 end
 
@@ -215,7 +256,16 @@ end
 ; move
 ;----------------------
 to move-mosquito
-  rt random 50 - random 50
+  ifelse sex = "female" [
+    let target one-of humans in-radius 5
+    ifelse target != nobody [
+     face target
+    ][
+      rt random 50 - random 50
+    ]
+  ][
+    rt random 50 - random 50
+  ]
   fd 2 + random-float 1.5  ;; 2 to 3.5 units per day
 end
 
@@ -230,28 +280,33 @@ end
 to bite-human
   let target one-of humans in-radius 1
   if target != nobody [
+    set mosquito-bites mosquito-bites + 1
     ifelse infected? [
       infect-human target serotype
+      set humans-infected-by-mosquito humans-infected-by-mosquito + 1
     ][
       if not infected? and sex = "female" and [infected?] of target[
         set infected? true
+        set color red
         set serotype [current-serotype] of target
+        set mosquitoes-infected-by-humans mosquitoes-infected-by-humans + 1
       ]
     ]
   ]
 end
 
 to reproduce
-  let water-location? any? patches with [pcolor = blue] in-radius 1
+  let water-location? any? patches with [pcolor = blue] in-radius 0.1
   if not water-location? [ stop ]
 
   let clutch-size random 71 + 30              ;; 30 - 100 eggs
   let remaining-eggs 400 - eggs-laid
   if remaining-eggs <= 0 [ stop ]
+  ;  50            30
   if clutch-size > remaining-eggs [ set clutch-size remaining-eggs ]
 
   let chance random 61 + 30  ;; 30–90%
-  if random-float 100 < chance [ ;; 20% chance to lay eggs daily
+  if random-float 100 < chance [
     set total-larvae total-larvae + clutch-size
     set cur-larvae-population cur-larvae-population + clutch-size
 
@@ -261,6 +316,13 @@ to reproduce
       set development-time random 5 + 5  ;; larva matures in 5–9 days
       set color gray
       set size larvae-size
+      ifelse [infected?] of myself [
+        set infected? (random-float 100 < 6.5)
+        set serotype [serotype] of myself
+      ][
+        set infected? false
+        set serotype ""
+      ]
     ]
   ]
   set eggs-laid eggs-laid + clutch-size
@@ -272,8 +334,6 @@ end
 to hatch-mosquito
   hatch-mosquitoes 1 [
     setxy [xcor] of myself [ycor] of myself
-    set infected? false
-    set serotype ""
     set bite-cycle 3
     set days-since-bite random 3
     set lifespan 30
@@ -283,10 +343,16 @@ to hatch-mosquito
     set color gray
     set size mosquito-size
     set eggs-laid 0
+    ifelse [infected?] of myself [
+      set infected? true
+      set serotype [serotype] of myself
+    ][
+      set infected? false
+      set serotype ""
+    ]
   ]
   set total-mosquitoes total-mosquitoes + 1
   set cur-mosqto-population cur-mosqto-population + 1
-
 end
 
 ;----------------------
@@ -300,6 +366,7 @@ to infect-human [h s]
     set dengue-serotypes lput s dengue-serotypes
     set severe-dengue? (length dengue-serotypes > 1)
     set recovery-time (ifelse-value severe-dengue? [random 7 + 14] [random 4 + 7])
+    set temp-immunity recovery-time + 60
     set color yellow
     set n-human-infected n-human-infected + 1
   ]
@@ -330,13 +397,13 @@ to maybe-die [h]
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
-880
+850
 10
-1516
-648
+1470
+631
 -1
 -1
-17.43
+17.0
 1
 10
 1
@@ -357,10 +424,10 @@ ticks
 30.0
 
 BUTTON
-685
-30
-755
+655
 65
+725
+100
 NIL
 setup
 NIL
@@ -374,10 +441,10 @@ NIL
 1
 
 BUTTON
-786
-30
-857
-66
+756
+65
+827
+101
 NIL
 go
 T
@@ -424,45 +491,45 @@ INF-HUMANS%
 11
 
 SLIDER
-685
-130
-857
-161
+655
+165
+827
+198
 init-total-humans
 init-total-humans
 0
 1000
-425.0
+500.0
 1
 1
 NIL
 HORIZONTAL
 
 SLIDER
-685
-175
-857
-208
-init-n-human-infected
-init-n-human-infected
+655
+210
+827
+243
+init-n-turtles-infected
+init-n-turtles-infected
 0
 500
-80.0
+99.0
 1
 1
 NIL
 HORIZONTAL
 
 SLIDER
-685
-80
-857
-113
+655
+115
+827
+148
 init-total-mosquitoes
 init-total-mosquitoes
 0
 10000
-6357.0
+4904.0
 1
 1
 NIL
@@ -648,15 +715,15 @@ mosquito-death-toll
 11
 
 SLIDER
-685
-220
-860
-253
+655
+255
+827
+288
 water-density
 water-density
 0
-100
-16.0
+50
+50.0
 1
 1
 %
@@ -681,6 +748,39 @@ MONITOR
 HUMANS-DIED
 human-death-toll
 0
+1
+11
+
+INPUTBOX
+500
+65
+635
+125
+max-ticks
+100.0
+1
+0
+Number
+
+MONITOR
+15
+70
+120
+115
+MOSQ-INF-RATE
+mosquito_to_human_rate
+2
+1
+11
+
+MONITOR
+285
+225
+390
+270
+HUMAN-INF-RATE
+human_to_mosquito_rate
+2
 1
 11
 
@@ -1096,6 +1196,148 @@ NetLogo 6.4.0
 @#$#@#$#@
 @#$#@#$#@
 @#$#@#$#@
+<experiments>
+  <experiment name="Effect of Water Density on Dengue Spread (20% density)" repetitions="10" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <metric>mosquito_to_human_rate</metric>
+    <metric>human_to_mosquito_rate</metric>
+    <metric>total-mosquitoes</metric>
+    <metric>mosquito-death-toll</metric>
+    <metric>cur-human-population</metric>
+    <metric>%infected-humans</metric>
+    <metric>%recovered-humans</metric>
+    <metric>total-larvae</metric>
+    <metric>total-hatched-larvae</metric>
+    <enumeratedValueSet variable="init-total-humans">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="init-n-turtles-infected">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="water-density">
+      <value value="20"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="init-total-mosquitoes">
+      <value value="5000"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="max-ticks">
+      <value value="100"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="Effect of Water Density on Dengue Spread (10% density)" repetitions="10" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <metric>mosquito_to_human_rate</metric>
+    <metric>human_to_mosquito_rate</metric>
+    <metric>total-mosquitoes</metric>
+    <metric>mosquito-death-toll</metric>
+    <metric>cur-human-population</metric>
+    <metric>%infected-humans</metric>
+    <metric>%recovered-humans</metric>
+    <metric>total-larvae</metric>
+    <metric>total-hatched-larvae</metric>
+    <enumeratedValueSet variable="init-total-humans">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="init-n-turtles-infected">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="water-density">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="init-total-mosquitoes">
+      <value value="5000"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="max-ticks">
+      <value value="100"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="Effect of Water Density on Dengue Spread (30% density)" repetitions="10" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <metric>mosquito_to_human_rate</metric>
+    <metric>human_to_mosquito_rate</metric>
+    <metric>total-mosquitoes</metric>
+    <metric>mosquito-death-toll</metric>
+    <metric>cur-human-population</metric>
+    <metric>%infected-humans</metric>
+    <metric>%recovered-humans</metric>
+    <metric>total-larvae</metric>
+    <metric>total-hatched-larvae</metric>
+    <enumeratedValueSet variable="init-total-humans">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="init-n-turtles-infected">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="water-density">
+      <value value="30"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="init-total-mosquitoes">
+      <value value="5000"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="max-ticks">
+      <value value="100"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="Effect of Water Density on Dengue Spread (40% density)" repetitions="10" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <metric>mosquito_to_human_rate</metric>
+    <metric>human_to_mosquito_rate</metric>
+    <metric>total-mosquitoes</metric>
+    <metric>mosquito-death-toll</metric>
+    <metric>cur-human-population</metric>
+    <metric>%infected-humans</metric>
+    <metric>%recovered-humans</metric>
+    <metric>total-larvae</metric>
+    <metric>total-hatched-larvae</metric>
+    <enumeratedValueSet variable="init-total-humans">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="init-n-turtles-infected">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="water-density">
+      <value value="40"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="init-total-mosquitoes">
+      <value value="5000"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="max-ticks">
+      <value value="100"/>
+    </enumeratedValueSet>
+  </experiment>
+  <experiment name="Effect of Water Density on Dengue Spread (50% density)" repetitions="10" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <metric>mosquito_to_human_rate</metric>
+    <metric>human_to_mosquito_rate</metric>
+    <metric>total-mosquitoes</metric>
+    <metric>mosquito-death-toll</metric>
+    <metric>cur-human-population</metric>
+    <metric>%infected-humans</metric>
+    <metric>%recovered-humans</metric>
+    <metric>total-larvae</metric>
+    <metric>total-hatched-larvae</metric>
+    <enumeratedValueSet variable="init-total-humans">
+      <value value="500"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="init-n-turtles-infected">
+      <value value="10"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="water-density">
+      <value value="50"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="init-total-mosquitoes">
+      <value value="5000"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="max-ticks">
+      <value value="100"/>
+    </enumeratedValueSet>
+  </experiment>
+</experiments>
 @#$#@#$#@
 @#$#@#$#@
 default
