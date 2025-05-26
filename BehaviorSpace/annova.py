@@ -13,11 +13,18 @@ headers = [
     "mosquito-death-toll (std)",
     "cur-human-population (mean) ",
     "cur-human-population (std)",
-    ""
+    "infected-humans-percentage (mean)",
+    "infected-humans-percentage (std)",
+    "recovered-humans-percentage (mean)",
+    "recovered-humans-percentage (std)",
+    "total-larvae (mean)",
+    "total-larvae (std)",
+    "total-hatched-larvae (mean)",
+    "total-hatched-larvae (std)"
 ]
 
-df = pd.read_csv(r"/10/FinalProject Effect of Water Density on Dengue Spread (10% density)-stats.csv")
-df.
+df = pd.read_csv("./10/FinalProject Effect of Water Density on Dengue Spread (10 density)-stats.csv", header=None, names=headers)
+df.drop(index=df.index[0], axis="index", inplace=True)
 model = ols('infection_rate ~ C(water_density)', data=df).fit()
 anova_table = sm.stats.anova_lm(model, typ=2)
 print(anova_table)
